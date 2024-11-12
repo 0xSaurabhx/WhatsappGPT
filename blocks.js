@@ -53,6 +53,37 @@ function updateChatHistory(sender, message) {
   }
 }
 
+// Utility function to fetch OpenAI response with retries
+async function fetchOpenAIResponse(messages) {
+  const configuration = new Configuration({
+    apiKey: setting.keyopenai,
+  });
+  const openai = new OpenAIApi(configuration);
+
+  let retries = 5;
+  let delay = 1000; // Initial delay of 1 second
+
+  while (retries > 0) {
+    try {
+      const response = await openai.createChatCompletion({
+        model: "gpt-3.5-turbo",
+        messages: messages,
+      });
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      if (error.response && error.response.status === 429) {
+        console.log(`Rate limited by OpenAI, retrying in ${delay / 1000} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+        retries -= 1;
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Failed to fetch response from OpenAI after multiple retries.");
+}
+
 // Export function that handles incoming messages
 module.exports = sansekai = async (client, m, chatUpdate, store) => {
   try {
@@ -84,11 +115,6 @@ module.exports = sansekai = async (client, m, chatUpdate, store) => {
     else {
       // If OpenAI API key is not configured, return and do nothing
       if (setting.keyopenai === "ISI_APIKEY_OPENAI_DISINI") return;
-      // Create OpenAI API client
-      const configuration = new Configuration({
-        apiKey: setting.keyopenai,
-      });
-      const openai = new OpenAIApi(configuration);
 
       // Create chat completion request using previous messages from chat history
       const messages = [
@@ -98,17 +124,14 @@ module.exports = sansekai = async (client, m, chatUpdate, store) => {
       ];
 
       // Use OpenAI to generate response based on chat history and incoming message
-      const response = await openai.createChatCompletion({
-        model: "gpt-3.5-turbo",
-        messages: messages,
-      });
+      const responseContent = await fetchOpenAIResponse(messages);
 
       // Update chat history with incoming message and OpenAI-generated response
       updateChatHistory(m.sender, { role: "user", content: text });
-      updateChatHistory(m.sender, { role: "assistant", content: response.data.choices[0].message.content });
+      updateChatHistory(m.sender, { role: "assistant", content: responseContent });
 
       // Reply to the incoming message with OpenAI-generated response
-      m.reply(`${response.data.choices[0].message.content}`);
+      m.reply(`${responseContent}`);
     }
   } catch (err) {
     // If an error occurs, reply to the incoming message with the error message
